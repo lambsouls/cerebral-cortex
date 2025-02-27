@@ -1,8 +1,2 @@
-启动容器集群
-docker-compose up -d --build
+docker build -t cerebral-cortex:latest https://github.com/lambsouls/Cerebral-Cortex.git
 
-查看运行状态
-docker ps --filter "name=cerebral-cortex"
-
-验证模块加载 查看容器日志：
-docker logs cerebral-cortex
