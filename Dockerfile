@@ -20,6 +20,7 @@ RUN adduser -D cortexuser && \
 COPY ./app ./app
 COPY ./mods ./mods
 
-USER cortexuser  # 非root运行
+# 以 root 用户运行
+USER root
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0"]
