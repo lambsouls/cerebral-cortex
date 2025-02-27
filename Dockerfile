@@ -1,5 +1,5 @@
 # 基于更小的镜像
-FROM python:3.10-alpine
+FROM ghcr.io/lambsouls/python:3.10-alpine
 
 ENV PYTHONPATH=/app
 
