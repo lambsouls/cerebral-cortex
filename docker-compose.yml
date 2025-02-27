@@ -1,0 +1,11 @@
+version: '3'
+services:
+  cerebral-cortex:  # ← 服务名称修改
+    container_name: cerebral-cortex  # ← 容器命名
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SILICONFLOW_API_KEY=your_api_key_here
+    volumes:
+      - ./mods:/app/mods  # 挂载mods目录便于热更新
