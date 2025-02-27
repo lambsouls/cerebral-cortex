@@ -11,8 +11,10 @@ WORKDIR /app
 
 # 优化依赖安装顺序
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    adduser -D cortexuser && \  # 添加安全用户
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 添加安全用户
+RUN adduser -D cortexuser && \
     chown -R cortexuser:cortexuser /app
 
 COPY ./app ./app
