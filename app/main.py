@@ -2,15 +2,25 @@ import os
 import time
 import json
 import logging
+import asyncio
 import requests
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from .models import ChatCompletionRequest, ChatCompletionResponse
 from .mod_loader import mod_processor
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 logger = logging.getLogger("cortex")
 
+# 允许所有来源的跨域请求（生产环境中应指定具体的来源）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有来源
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有 HTTP 方法
+    allow_headers=["*"],  # 允许所有请求头
+)
 # Configuration
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
 UPSTREAM_ENDPOINT = os.getenv("SILICONFLOW_ENDPOINT", "https://api.siliconflow.cn/v1/chat/completions")
@@ -21,58 +31,55 @@ async def startup():
 
 async def log_streaming_chunks(response_stream, request_data, request):
     """流式响应处理与实时日志"""
-    is_thinking = False  # 标记是否正在输出 reasoning_content
+    is_thinking = False
     has_added_opening_tag = False
-    # 标志位，用于跟踪是否已经处理完 reasoning_content
     has_reasoning_ended = False
-    # 用于存储完整的 reasoning_content
-
-    full_response = ""  # 用于存储完整响应以便后续 hash 处理
+    full_response = ""
     full_reasoning_content = ""
     try:
         for line in response_stream.iter_content(chunk_size=1024):
+            if await request.is_disconnected():  # 检测客户端是否断开
+                print("\n客户端已断开，停止流式传输")
+                break
+
             if line:
                 decoded_line = line.decode('utf-8')
                 if decoded_line.startswith('data:'):
                     json_str = decoded_line[5:].strip()
-                    if json_str == "[DONE]":  # 检查是否为流式响应结束信号
+                    if json_str == "[DONE]":
                         print("\n[DONE]")
                         break
-                if json_str:  # 仅当字符串非空时尝试解析
+
+                if json_str:
                     try:
                         chunk = json.loads(json_str)
-                        if 'choices' in chunk:  # 确保响应包含 choices 字段
+                        if 'choices' in chunk:
                             reasoning_content = chunk['choices'][0]['delta'].get('reasoning_content', '')
                             content = chunk['choices'][0]['delta'].get('content', '')
-                            if 'choices' in chunk:  # 确保响应包含 choices 字段
-                                reasoning_content = chunk['choices'][0]['delta'].get('reasoning_content', '')
-                                content = chunk['choices'][0]['delta'].get('content', '')
-                                if reasoning_content:
-                                    # 如果是第一次输出 reasoning_content，添加开头标签
-                                    if not has_added_opening_tag:
-                                        print(f"<think>\n{reasoning_content}", end='', flush=True)
-                                        has_added_opening_tag = True
-                                    else:
-                                        print(reasoning_content, end='', flush=True)
-                                    full_reasoning_content += reasoning_content
-                                elif not has_reasoning_ended and full_reasoning_content:
-                                    # reasoning_content 结束，输出结尾标签
-                                    print("</think>", end='', flush=True)
-                                    has_reasoning_ended = True
-                                if content:
-                                    print(content, end='', flush=True)
-                                    full_response += content
-                                
+                            if reasoning_content:
+                                if not has_added_opening_tag:
+                                    print(f"<think>\n{reasoning_content}", end='', flush=True)
+                                    has_added_opening_tag = True
+                                else:
+                                    print(reasoning_content, end='', flush=True)
+                                full_reasoning_content += reasoning_content
+                            elif not has_reasoning_ended and full_reasoning_content:
+                                print("</think>", end='', flush=True)
+                                has_reasoning_ended = True
+                            if content:
+                                print(content, end='', flush=True)
+                                full_response += content
+
                     except (json.JSONDecodeError, KeyError) as e:
-                        print(f"解析 chunk 时出错：{e}") 
-                    yield decoded_line  # 实时返回给客户端
+                        print(f"解析 chunk 时出错：{e}")
+                    yield decoded_line
 
     except UnicodeDecodeError as e:
         print(f"解码 line 时出错：{e}")
 
     response_stream.close()
 
-    print(f"\n💠 流式传输完成，总长度: {len(full_response)} bytes")
+    print(f"\n流式传输完成，总长度: {len(full_response)} bytes")
     await mod_processor.run_postprocess({
         "type": "stream",
         "original_request": request_data,
@@ -84,7 +91,7 @@ async def log_streaming_chunks(response_stream, request_data, request):
 async def handle_request(request: Request):
     # Step 1: 原始请求记录
     request_data = await request.json()
-    print(f"\n🎯 收到请求 ({'stream' if request_data.get('stream', False) else 'static'})")
+    print(f"\n收到请求 ({'stream' if request_data.get('stream', False) else 'static'})")
     print("┏━━ 原始请求 ━━━━━━━━━━━")
     print(json.dumps(request_data, indent=2, ensure_ascii=False))
     print("┗━━━━━━━━━━━━━━━━━━━━━━")
@@ -96,7 +103,7 @@ async def handle_request(request: Request):
     try:
         if processed_data.get("stream", False):
             # 流式请求
-            print("\n🌀 进入流式处理模式")
+            print("\n进入流式处理模式")
             response = requests.post(
                 UPSTREAM_ENDPOINT,
                 json=processed_data,
@@ -122,7 +129,7 @@ async def handle_request(request: Request):
                 }
             )
             response.raise_for_status()
-            print(f"\n📦 收到静态响应 ({len(response.text)} bytes)")
+            print(f"\n收到静态响应 ({len(response.text)} bytes)")
             response_data = response.json()
             print("┏━━ 原始响应 ━━━━━━━━━")
             print(json.dumps(response_data, indent=2, ensure_ascii=False))
