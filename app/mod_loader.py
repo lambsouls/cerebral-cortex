@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable, List, Dict, Any
 import asyncio
 import time
+import json
 
 class ModProcessor:
     def __init__(self):
@@ -54,6 +55,7 @@ class ModProcessor:
                 print(f"完成处理 [{mod['name']}] ({cost:.2f}ms)")
             except Exception as e:
                 print(f"模块 {mod['name']} 后处理错误: {str(e)}")
+        #print(json.dumps(data, indent=2, ensure_ascii=False))
         return data
 
 mod_processor = ModProcessor()

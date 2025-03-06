@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from .models import ChatCompletionRequest, ChatCompletionResponse
 from .mod_loader import mod_processor
 from fastapi.middleware.cors import CORSMiddleware
+from .instruction_handler import handle_instruction
 
 app = FastAPI()
 logger = logging.getLogger("cortex")
@@ -72,6 +73,7 @@ async def log_streaming_chunks(response_stream, request_data, request):
 
                     except (json.JSONDecodeError, KeyError) as e:
                         print(f"解析 chunk 时出错：{e}")
+                    #print(json.dumps(decoded_line, indent=2, ensure_ascii=False))
                     yield decoded_line
 
     except UnicodeDecodeError as e:
@@ -86,6 +88,103 @@ async def log_streaming_chunks(response_stream, request_data, request):
         "response": full_response
     }, request)
 
+async def generate_stream_chunks(instruction_result):
+    """
+    生成符合客户端格式的流式数据
+    """
+    # 初始 chunk：设置角色
+    initial_chunk = {
+        "id": "chatcmpl-12345",  # 唯一的 ID
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": "deepseek-ai/DeepSeek-R1",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": ""
+                },
+                "finish_reason": None,
+                "content_filter_results": {
+                    "hate": {"filtered": False},
+                    "self_harm": {"filtered": False},
+                    "sexual": {"filtered": False},
+                    "violence": {"filtered": False}
+                }
+            }
+        ],
+        "system_fingerprint": "",
+        "usage": {
+            "prompt_tokens": 16,
+            "completion_tokens": 0,
+            "total_tokens": 16
+        }
+    }
+    yield f"data: {json.dumps(initial_chunk)}\n\n"
+
+    # 生成内容的 chunks
+    content = "/instruction \n"f"指令: {instruction_result['instruction']}\n结果: {instruction_result['result']}\n额外信息: {instruction_result['extra_info']}"
+    for i in range(0, len(content), 2):  # 每次返回 2 个字符
+        chunk = {
+            "id": "chatcmpl-12345",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "deepseek-ai/DeepSeek-R1",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "reasoning_content": None,
+                        "content": content[i:i+2]  # 每次返回部分内容
+                    },
+                    "finish_reason": None,
+                    "content_filter_results": {
+                        "hate": {"filtered": False},
+                        "self_harm": {"filtered": False},
+                        "sexual": {"filtered": False},
+                        "violence": {"filtered": False}
+                    }
+                }
+            ],
+            "system_fingerprint": "",
+            "usage": {
+                "prompt_tokens": 16,
+                "completion_tokens": i + 1,
+                "total_tokens": 16 + i + 1
+            }
+        }
+        yield f"data: {json.dumps(chunk)}\n\n"
+
+    # 最后一个 chunk：结束标志
+    final_chunk = {
+        "id": "chatcmpl-12345",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": "deepseek-ai/DeepSeek-R1",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+                "content_filter_results": {
+                    "hate": {"filtered": False},
+                    "self_harm": {"filtered": False},
+                    "sexual": {"filtered": False},
+                    "violence": {"filtered": False}
+                }
+            }
+        ],
+        "system_fingerprint": "",
+        "usage": {
+            "prompt_tokens": 16,
+            "completion_tokens": len(content),
+            "total_tokens": 16 + len(content)
+        }
+    }
+    yield f"data: {json.dumps(final_chunk)}\n\n"
+
 
 @app.post("/v1/chat/completions")
 async def handle_request(request: Request):
@@ -94,12 +193,58 @@ async def handle_request(request: Request):
     print(f"\n收到请求 ({'stream' if request_data.get('stream', False) else 'static'})")
     print("┏━━ 原始请求 ━━━━━━━━━━━")
     print(json.dumps(request_data, indent=2, ensure_ascii=False))
-    print("┗━━━━━━━━━━━━━━━━━━━━━━")
+    print("┗━━━━━━━━━━━━━━━━━━━━━━━")
 
     # Step 2: 预处理链
     processed_data = await mod_processor.run_preprocess(request_data, request)
+ 
+    # Step 3: 指令处理
+    # 获取消息内容和上下文信息
+    messages = processed_data.get("messages", [])
+    last_message = messages[-1]["content"] if messages else ""
     
-    # Step 3: 分发请求
+    # 调用指令处理函数
+    instruction_result = handle_instruction(last_message)
+    
+    # 如果是指令，返回指令处理结果
+    if instruction_result and instruction_result.get("skip_api", False):
+        
+        # 构造与 API 输出一致的响应格式
+        print("┏━━ 指令信息 ━━━━━━━━━━━")
+        print(f"指令: {instruction_result['instruction']}")
+        print(f"结果: {instruction_result['result']}")
+        print(f"额外信息: {instruction_result['extra_info']}")
+        print("┗━━━━━━━━━━━━━━━━━━━━━━━")
+        
+        is_stream = request_data.get("stream", False)
+        #如果是非流式输出，返回非流式输出指令处理结果
+        if not is_stream:
+            response_data = {
+                                "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {
+                                    "role": "assistant",
+                                    "content":"/instruction \n"
+                                        f"指令: {instruction_result['instruction']}\n"
+                                        f"结果: {instruction_result['result']}\n"
+                                        f"额外信息: {instruction_result['extra_info']}"
+                                    },
+                                    "finish_reason": "stop"
+                                }
+                                ],
+                            }
+            #print(json.dumps(response_data, indent=2, ensure_ascii=False))
+            # 返回与 API 一致的响应
+            return response_data
+        # 流式模式
+        else:
+            return StreamingResponse(
+                generate_stream_chunks(instruction_result),
+                media_type="text/event-stream"
+            )
+
+    # Step 4: 分发请求
     try:
         if processed_data.get("stream", False):
             # 流式请求
@@ -133,14 +278,14 @@ async def handle_request(request: Request):
             response_data = response.json()
             print("┏━━ 原始响应 ━━━━━━━━━")
             print(json.dumps(response_data, indent=2, ensure_ascii=False))
-            print("┗━━━━━━━━━━━━━━━━━━━")
+            print("┗━━━━━━━━━━━━━━━━━━━━━")
 
             # 后处理
             post_data = await mod_processor.run_postprocess({
                 "type": "static",
                 "original_request": request_data,
                 "response": response_data
-            }, request=request)
+            }, request)
             return post_data["response"]
     except requests.exceptions.HTTPError as e:
         logger.error(f"上游API错误: {e.response.status_code} - {e.response.text}")
