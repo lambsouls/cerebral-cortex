@@ -5,5 +5,5 @@ async def preprocess(data: dict, request):
 
 async def postprocess(data: dict, request):
     """后处理"""
-    print(f"\n预处理模板...")
+    print(f"\n后处理模板...")
     return data
