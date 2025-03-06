@@ -4,7 +4,7 @@
 
 
 
-#docker build -t cerebral-cortex:latest https://github.com/lambsouls/Cerebral-Cortex.git#main
+#docker build -t cerebral-cortex:latest https://github.com/lambsouls/cerebral-cortex.git#old-main-20250306
 
 #docker tag cerebral-cortex:latest ghcr.io/lambsouls/cerebral-cortex:latest
 
